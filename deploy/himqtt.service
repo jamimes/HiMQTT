@@ -1,0 +1,24 @@
+[Unit]
+Description=HiMQTT MQTT Broker
+Documentation=https://github.com/bytebeamio/rumqtt
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=himqtt
+Group=himqtt
+ExecStart=/usr/local/bin/himqtt -q -c /etc/himqtt/himqtt.toml -v
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+
+# 安全加固（可按需调整）
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/himqtt
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

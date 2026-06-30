@@ -1,0 +1,13 @@
+[package]
+name = "himqtt"
+version = "0.1.0"
+edition = "2021"
+description = "基于 rumqttd 的 MQTT 服务器，适用于 Ubuntu/Linux"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+config = "0.14"
+rumqttd = "0.20"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -1,0 +1,52 @@
+id = 0
+
+[router]
+id = 0
+max_connections = 10000
+max_outgoing_packet_count = 200
+max_segment_size = 104857600
+max_segment_count = 10
+
+# MQTT 3.1.1，标准端口 1883
+[v4.1]
+name = "mqtt-v4"
+listen = "0.0.0.0:1883"
+next_connection_delay_ms = 1
+    [v4.1.connections]
+    connection_timeout_ms = 60000
+    max_payload_size = 262144
+    max_inflight_count = 100
+    dynamic_filters = true
+    # 取消注释以启用用户名/密码认证
+    # [v4.1.connections.auth]
+    # admin = "changeme"
+
+# MQTT 5.0
+[v5.1]
+name = "mqtt-v5"
+listen = "0.0.0.0:1884"
+next_connection_delay_ms = 1
+    [v5.1.connections]
+    connection_timeout_ms = 60000
+    max_payload_size = 262144
+    max_inflight_count = 100
+
+# WebSocket（浏览器 / 前端客户端）
+[ws.1]
+name = "mqtt-ws"
+listen = "0.0.0.0:8083"
+next_connection_delay_ms = 1
+    [ws.1.connections]
+    connection_timeout_ms = 60000
+    max_client_id_len = 256
+    max_payload_size = 262144
+    max_inflight_count = 500
+
+# 管理控制台
+[console]
+listen = "127.0.0.1:3030"
+
+# Prometheus 指标（仅本机）
+[prometheus]
+listen = "127.0.0.1:9042"
+interval = 5
