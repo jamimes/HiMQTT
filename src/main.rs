@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::thread;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -6,7 +7,15 @@ use config::FileFormat;
 use rumqttd::Broker;
 use tracing::trace;
 
+mod monitor;
+
 static DEFAULT_CONFIG: &str = include_str!("../config/himqtt.toml");
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct MonitorSettings {
+    #[serde(default)]
+    monitor: monitor::MonitorConfig,
+}
 
 #[derive(Parser)]
 #[command(name = "himqtt")]
@@ -24,6 +33,10 @@ struct Cli {
     /// 启动时不打印横幅
     #[arg(short, long)]
     quiet: bool,
+
+    /// 禁用监控 Web 页面
+    #[arg(long)]
+    no_monitor: bool,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -64,30 +77,21 @@ fn main() -> Result<()> {
         .with_filter_reloading();
 
     let reload_handle = builder.reload_handle();
-
     builder
         .try_init()
         .expect("初始化日志订阅器失败");
 
-    let mut config_builder = config::Config::builder();
-
-    if cli.config.exists() {
-        config_builder =
-            config_builder.add_source(config::File::with_name(cli.config.to_str().unwrap()));
+    let config_path = if cli.config.exists() {
+        cli.config.to_str().unwrap().to_string()
     } else {
         eprintln!(
             "配置文件 {} 不存在，使用内置默认配置",
             cli.config.display()
         );
-        config_builder =
-            config_builder.add_source(config::File::from_str(DEFAULT_CONFIG, FileFormat::Toml));
-    }
+        String::new()
+    };
 
-    let mut configs: rumqttd::Config = config_builder
-        .build()
-        .context("读取配置失败")?
-        .try_deserialize()
-        .context("解析配置失败")?;
+    let (mut configs, monitor_cfg) = load_config(&config_path)?;
 
     if let Some(console_config) = configs.console.as_mut() {
         console_config.set_filter_reload_handle(reload_handle);
@@ -96,11 +100,73 @@ fn main() -> Result<()> {
     validate_config(&configs);
 
     let mut broker = Broker::new(configs);
-    broker
-        .start()
-        .map_err(|e| anyhow::anyhow!("MQTT 服务器启动失败: {e}"))?;
+
+    let monitor_state = if !cli.no_monitor {
+        let meters = broker.meters().context("创建 meters 链路失败")?;
+        let (mut link_tx, link_rx) = broker.link("himqtt-monitor").context("创建监控链路失败")?;
+        link_tx
+            .subscribe("#")
+            .context("监控订阅 # 失败")?;
+
+        let state = monitor::MonitorState::new(monitor_cfg.max_messages);
+        state.spawn_collector(link_rx, meters);
+        Some((state, monitor_cfg.listen))
+    } else {
+        None
+    };
+
+    if let Some((state, listen)) = monitor_state {
+        thread::Builder::new()
+            .name("himqtt-broker".into())
+            .spawn(move || {
+                if let Err(e) = broker.start() {
+                    tracing::error!("MQTT 服务器退出: {e}");
+                }
+            })
+            .context("启动 broker 线程失败")?;
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .context("创建 tokio runtime 失败")?;
+        rt.block_on(monitor::MonitorState::serve(state, listen))?;
+    } else {
+        broker
+            .start()
+            .map_err(|e| anyhow::anyhow!("MQTT 服务器启动失败: {e}"))?;
+    }
 
     Ok(())
+}
+
+fn load_config(path: &str) -> Result<(rumqttd::Config, monitor::MonitorConfig)> {
+    let mut builder = config::Config::builder();
+    if path.is_empty() {
+        builder = builder.add_source(config::File::from_str(DEFAULT_CONFIG, FileFormat::Toml));
+    } else {
+        builder = builder.add_source(config::File::with_name(path));
+    }
+
+    let settings = builder
+        .build()
+        .context("读取配置失败")?
+        .try_deserialize::<MonitorSettings>()
+        .context("解析配置失败")?;
+
+    let mut broker_builder = config::Config::builder();
+    if path.is_empty() {
+        broker_builder = broker_builder.add_source(config::File::from_str(DEFAULT_CONFIG, FileFormat::Toml));
+    } else {
+        broker_builder = broker_builder.add_source(config::File::with_name(path));
+    }
+
+    let configs: rumqttd::Config = broker_builder
+        .build()
+        .context("读取 broker 配置失败")?
+        .try_deserialize()
+        .context("解析 broker 配置失败")?;
+
+    Ok((configs, settings.monitor))
 }
 
 fn validate_config(configs: &rumqttd::Config) {

@@ -42,11 +42,23 @@ next_connection_delay_ms = 1
     max_payload_size = 262144
     max_inflight_count = 500
 
-# 管理控制台
+# 管理控制台（rumqttd JSON API）
 [console]
 listen = "127.0.0.1:3030"
 
-# Prometheus 指标（仅本机）
+# Prometheus 指标
 [prometheus]
 listen = "127.0.0.1:9042"
 interval = 5
+
+# 周期性推送连接/订阅指标给监控页（alerts 段需同时存在，避免 rumqttd timer panic）
+[metrics.meters]
+push_interval = 1
+
+[metrics.alerts]
+push_interval = 30
+
+# HiMQTT 监控 Web 页面
+[monitor]
+listen = "127.0.0.1:8090"
+max_messages = 500
