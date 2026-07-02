@@ -29,16 +29,21 @@ jobs:
       - name: Build release
         run: cargo build --release
 
+      - name: Prepare deploy bundle
+        run: |
+          mkdir -p bundle
+          cp target/release/himqtt bundle/
+          cp config/himqtt.toml bundle/
+          cp deploy/himqtt.service bundle/
+          cp scripts/deploy_server.sh bundle/
+          cp scripts/mqtt_smoke_test.py bundle/
+          chmod +x bundle/deploy_server.sh
+
       - name: Upload deploy artifact
         uses: actions/upload-artifact@v4
         with:
           name: himqtt-deploy
-          path: |
-            target/release/himqtt
-            config/himqtt.toml
-            deploy/himqtt.service
-            scripts/deploy_server.sh
-            scripts/mqtt_smoke_test.py
+          path: bundle/
 
   deploy:
     needs: build
@@ -48,16 +53,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: himqtt-deploy
+          path: bundle
 
-      - name: Prepare deploy bundle
-        run: |
-          mkdir -p bundle
-          cp himqtt bundle/
-          cp himqtt.toml bundle/
-          cp himqtt.service bundle/
-          cp deploy_server.sh bundle/
-          cp mqtt_smoke_test.py bundle/
-          chmod +x bundle/deploy_server.sh
+      - name: Show bundle contents
+        run: ls -la bundle/
 
       - name: Upload bundle to server
         uses: appleboy/scp-action@v0.1.7
