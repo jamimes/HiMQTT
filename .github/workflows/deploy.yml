@@ -1,0 +1,95 @@
+name: Deploy HiMQTT
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-himqtt
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Upload deploy artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: himqtt-deploy
+          path: |
+            target/release/himqtt
+            config/himqtt.toml
+            deploy/himqtt.service
+            scripts/deploy_server.sh
+            scripts/mqtt_smoke_test.py
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: himqtt-deploy
+
+      - name: Prepare deploy bundle
+        run: |
+          mkdir -p bundle
+          cp himqtt bundle/
+          cp himqtt.toml bundle/
+          cp himqtt.service bundle/
+          cp deploy_server.sh bundle/
+          cp mqtt_smoke_test.py bundle/
+          chmod +x bundle/deploy_server.sh
+
+      - name: Upload bundle to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: 22
+          source: "bundle/*"
+          target: "/tmp/himqtt-deploy"
+          strip_components: 1
+
+      - name: Install, firewall, verify ports
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: 22
+          script: |
+            set -euo pipefail
+            export DEPLOY_HOST="${{ secrets.DEPLOY_HOST }}"
+            chmod +x /tmp/himqtt-deploy/deploy_server.sh
+            /tmp/himqtt-deploy/deploy_server.sh /tmp/himqtt-deploy
+
+      - name: External port probe (optional)
+        continue-on-error: true
+        run: |
+          HOST="${{ secrets.DEPLOY_HOST }}"
+          for PORT in 1883 1884 8083; do
+            echo "Probing ${HOST}:${PORT} ..."
+            timeout 5 bash -c "echo > /dev/tcp/${HOST}/${PORT}" \
+              && echo "OK: ${PORT} reachable" \
+              || echo "WARN: ${PORT} not reachable from GitHub runner (可能内网/安全组限制)"
+          done
