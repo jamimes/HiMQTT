@@ -38,12 +38,14 @@ jobs:
           cp scripts/deploy_server.sh bundle/
           cp scripts/mqtt_smoke_test.py bundle/
           chmod +x bundle/deploy_server.sh
+          tar czf himqtt-deploy.tgz -C bundle .
+          tar tzf himqtt-deploy.tgz
 
       - name: Upload deploy artifact
         uses: actions/upload-artifact@v4
         with:
           name: himqtt-deploy
-          path: bundle/
+          path: himqtt-deploy.tgz
 
   deploy:
     needs: build
@@ -53,21 +55,16 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: himqtt-deploy
-          path: bundle
 
-      - name: Show bundle contents
-        run: ls -la bundle/
-
-      - name: Upload bundle to server
+      - name: Upload bundle archive to server
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: 22
-          source: "bundle/*"
-          target: "/tmp/himqtt-deploy"
-          strip_components: 1
+          source: "himqtt-deploy.tgz"
+          target: "/tmp"
 
       - name: Install, firewall, verify ports
         uses: appleboy/ssh-action@v1.2.0
@@ -79,8 +76,15 @@ jobs:
           script: |
             set -euo pipefail
             export DEPLOY_HOST="${{ secrets.DEPLOY_HOST }}"
-            chmod +x /tmp/himqtt-deploy/deploy_server.sh
-            /tmp/himqtt-deploy/deploy_server.sh /tmp/himqtt-deploy
+            DEPLOY_DIR="/tmp/himqtt-deploy"
+            mkdir -p "${DEPLOY_DIR}"
+            tar xzf /tmp/himqtt-deploy.tgz -C "${DEPLOY_DIR}"
+            echo "Deployed files:"
+            ls -la "${DEPLOY_DIR}"
+            test -x "${DEPLOY_DIR}/himqtt"
+            test -f "${DEPLOY_DIR}/deploy_server.sh"
+            chmod +x "${DEPLOY_DIR}/deploy_server.sh"
+            "${DEPLOY_DIR}/deploy_server.sh" "${DEPLOY_DIR}"
 
       - name: External port probe (optional)
         continue-on-error: true
