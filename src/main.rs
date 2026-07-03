@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::thread;
 
 use anyhow::{Context, Result};
@@ -7,14 +8,52 @@ use config::FileFormat;
 use rumqttd::Broker;
 use tracing::trace;
 
+mod acl;
+mod admin;
+mod db;
 mod monitor;
 
 static DEFAULT_CONFIG: &str = include_str!("../config/himqtt.toml");
 
 #[derive(Debug, Clone, serde::Deserialize)]
-struct MonitorSettings {
+struct DatabaseSettings {
+    url: String,
+    #[serde(default = "default_db_max_connections")]
+    max_connections: u32,
+}
+
+fn default_db_max_connections() -> u32 {
+    5
+}
+
+#[derive(Debug, Clone, serde::Deserialize, Default)]
+struct AclSettings {
+    #[serde(default = "default_true")]
+    enabled: bool,
+    #[serde(default = "default_true")]
+    enforce_registered_topics: bool,
+    #[serde(default = "default_cache_refresh")]
+    cache_refresh_secs: u64,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_cache_refresh() -> u64 {
+    10
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct AppSettings {
     #[serde(default)]
     monitor: monitor::MonitorConfig,
+    #[serde(default)]
+    database: Option<DatabaseSettings>,
+    #[serde(default)]
+    acl: AclSettings,
+    #[serde(default)]
+    admin: admin::AdminConfig,
 }
 
 #[derive(Parser)]
@@ -37,6 +76,10 @@ struct Cli {
     /// 禁用监控 Web 页面
     #[arg(long)]
     no_monitor: bool,
+
+    /// 禁用管理后台
+    #[arg(long)]
+    no_admin: bool,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -91,13 +134,38 @@ fn main() -> Result<()> {
         String::new()
     };
 
-    let (mut configs, monitor_cfg) = load_config(&config_path)?;
+    let (mut configs, app_settings) = load_config(&config_path)?;
 
     if let Some(console_config) = configs.console.as_mut() {
         console_config.set_filter_reload_handle(reload_handle);
     }
 
     validate_config(&configs);
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("创建 tokio runtime 失败")?;
+
+    let acl_service = if app_settings.acl.enabled {
+        let db_cfg = app_settings
+            .database
+            .as_ref()
+            .context("启用 ACL 时必须在配置中设置 [database]")?;
+        let pool = rt.block_on(db::connect(&db_cfg.url, db_cfg.max_connections))?;
+        rt.block_on(db::migrate(&pool))?;
+        let acl = Arc::new(AclService::from_settings(pool, &app_settings.acl));
+        rt.block_on(acl.init())?;
+        rt.block_on(acl.ensure_seed_data(&app_settings.admin.default_password))?;
+
+        let auth_acl = Arc::clone(&acl);
+        install_auth_handlers(&mut configs, auth_acl);
+        configs.set_acl_handler(acl::AclService::acl_handler(Arc::clone(&acl)));
+
+        Some(acl)
+    } else {
+        None
+    };
 
     let mut broker = Broker::new(configs);
 
@@ -108,38 +176,100 @@ fn main() -> Result<()> {
             .subscribe("#")
             .context("监控订阅 # 失败")?;
 
-        let state = monitor::MonitorState::new(monitor_cfg.max_messages);
+        let state = monitor::MonitorState::new(app_settings.monitor.max_messages);
         state.spawn_collector(link_rx, meters);
-        Some((state, monitor_cfg.listen))
+        Some(state)
     } else {
         None
     };
 
-    if let Some((state, listen)) = monitor_state {
-        thread::Builder::new()
-            .name("himqtt-broker".into())
-            .spawn(move || {
-                if let Err(e) = broker.start() {
-                    tracing::error!("MQTT 服务器退出: {e}");
-                }
-            })
-            .context("启动 broker 线程失败")?;
+    thread::Builder::new()
+        .name("himqtt-broker".into())
+        .spawn(move || {
+            if let Err(e) = broker.start() {
+                tracing::error!("MQTT 服务器退出: {e}");
+            }
+        })
+        .context("启动 broker 线程失败")?;
 
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .context("创建 tokio runtime 失败")?;
-        rt.block_on(monitor::MonitorState::serve(state, listen))?;
-    } else {
-        broker
-            .start()
-            .map_err(|e| anyhow::anyhow!("MQTT 服务器启动失败: {e}"))?;
-    }
+    rt.block_on(async move {
+        if let Some(acl) = &acl_service {
+            acl.spawn_refresh_task();
+        }
+
+        let mut tasks = Vec::new();
+
+        if !cli.no_admin {
+            if let Some(acl) = acl_service {
+                let admin_cfg = app_settings.admin.clone();
+                let monitor = monitor_state;
+                tasks.push(tokio::spawn(async move {
+                    admin::serve(acl, admin_cfg, monitor).await
+                }));
+            } else {
+                tracing::warn!("ACL 未启用，管理后台不会启动");
+            }
+        } else if monitor_state.is_some() {
+            tracing::warn!("已禁用管理后台，连接监控不可用（监控已并入管理后台）");
+        }
+
+        if tasks.is_empty() {
+            tokio::signal::ctrl_c().await.context("等待退出信号失败")?;
+            return Ok(());
+        }
+
+        let (result, _, _) = futures_util::future::select_all(tasks).await;
+        result.context("后台任务 join 失败")?
+    })?;
 
     Ok(())
 }
 
-fn load_config(path: &str) -> Result<(rumqttd::Config, monitor::MonitorConfig)> {
+use acl::{AclConfig, AclService};
+
+fn install_auth_handlers(configs: &mut rumqttd::Config, acl: Arc<AclService>) {
+    if let Some(v4) = configs.v4.as_mut() {
+        for server in v4.values_mut() {
+            let acl = Arc::clone(&acl);
+            server.set_auth_handler(move |_client_id, username, password| {
+                let acl = Arc::clone(&acl);
+                async move { acl.verify_mqtt_password(&username, &password).await }
+            });
+        }
+    }
+    if let Some(v5) = configs.v5.as_mut() {
+        for server in v5.values_mut() {
+            let acl = Arc::clone(&acl);
+            server.set_auth_handler(move |_client_id, username, password| {
+                let acl = Arc::clone(&acl);
+                async move { acl.verify_mqtt_password(&username, &password).await }
+            });
+        }
+    }
+    if let Some(ws) = configs.ws.as_mut() {
+        for server in ws.values_mut() {
+            let acl = Arc::clone(&acl);
+            server.set_auth_handler(move |_client_id, username, password| {
+                let acl = Arc::clone(&acl);
+                async move { acl.verify_mqtt_password(&username, &password).await }
+            });
+        }
+    }
+}
+
+impl AclService {
+    fn from_settings(pool: sqlx::PgPool, settings: &AclSettings) -> Self {
+        Self::new(
+            pool,
+            AclConfig {
+                enforce_registered_topics: settings.enforce_registered_topics,
+                cache_refresh_secs: settings.cache_refresh_secs,
+            },
+        )
+    }
+}
+
+fn load_config(path: &str) -> Result<(rumqttd::Config, AppSettings)> {
     let mut builder = config::Config::builder();
     if path.is_empty() {
         builder = builder.add_source(config::File::from_str(DEFAULT_CONFIG, FileFormat::Toml));
@@ -150,7 +280,7 @@ fn load_config(path: &str) -> Result<(rumqttd::Config, monitor::MonitorConfig)> 
     let settings = builder
         .build()
         .context("读取配置失败")?
-        .try_deserialize::<MonitorSettings>()
+        .try_deserialize::<AppSettings>()
         .context("解析配置失败")?;
 
     let mut broker_builder = config::Config::builder();
@@ -166,7 +296,7 @@ fn load_config(path: &str) -> Result<(rumqttd::Config, monitor::MonitorConfig)> 
         .try_deserialize()
         .context("解析 broker 配置失败")?;
 
-    Ok((configs, settings.monitor))
+    Ok((configs, settings))
 }
 
 fn validate_config(configs: &rumqttd::Config) {

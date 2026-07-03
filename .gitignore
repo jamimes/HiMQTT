@@ -1,2 +1,6 @@
 /target
+admin-web/node_modules
+admin-web/dist
 Cargo.lock
+admin-web/tsconfig.tsbuildinfo
+scripts/__pycache__/

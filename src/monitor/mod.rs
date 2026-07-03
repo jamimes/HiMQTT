@@ -1,4 +1,4 @@
-mod web;
+pub mod web;
 
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
@@ -11,8 +11,8 @@ use anyhow::{Context, Result};
 use rumqttd::local::{LinkError, LinkRx};
 use rumqttd::meters::MetersLink;
 use rumqttd::{Meter, Notification};
+pub use rumqttd::{ConnectionSnapshot, SubscriptionSnapshot};
 use serde::Serialize;
-use tokio::net::TcpListener;
 use tokio::sync::{broadcast, RwLock};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -77,6 +77,8 @@ pub enum MonitorEvent {
 pub struct MonitorState {
     messages: RwLock<VecDeque<MessageRecord>>,
     stats: RwLock<MonitorStats>,
+    connections: RwLock<Vec<ConnectionSnapshot>>,
+    subscriptions: RwLock<Vec<SubscriptionSnapshot>>,
     topic_counts: RwLock<HashMap<String, usize>>,
     recent_ts: RwLock<VecDeque<u128>>,
     message_total: AtomicU64,
@@ -90,6 +92,8 @@ impl MonitorState {
         Arc::new(Self {
             messages: RwLock::new(VecDeque::with_capacity(max_messages.min(1024))),
             stats: RwLock::new(MonitorStats::default()),
+            connections: RwLock::new(Vec::new()),
+            subscriptions: RwLock::new(Vec::new()),
             topic_counts: RwLock::new(HashMap::new()),
             recent_ts: RwLock::new(VecDeque::with_capacity(4096)),
             message_total: AtomicU64::new(0),
@@ -110,16 +114,19 @@ impl MonitorState {
             .expect("spawn monitor collector");
     }
 
-    pub async fn serve(self: Arc<Self>, listen: SocketAddr) -> Result<()> {
-        let app = web::router(self);
-        let listener = TcpListener::bind(listen)
-            .await
-            .with_context(|| format!("bind monitor {listen}"))?;
-        tracing::info!("监控页面: http://{listen}/");
-        axum::serve(listener, app)
-            .await
-            .context("monitor web server")?;
-        Ok(())
+    pub async fn list_messages(&self, recent_only: bool, limit: usize) -> Vec<MessageRecord> {
+        let limit = limit.min(self.max_messages).max(1);
+        let cutoff = now_millis().saturating_sub(60_000);
+        let messages = self.messages.read().await;
+        let mut out: Vec<MessageRecord> = messages
+            .iter()
+            .rev()
+            .filter(|msg| !recent_only || msg.ts >= cutoff)
+            .take(limit)
+            .cloned()
+            .collect();
+        out.sort_by(|a, b| b.ts.cmp(&a.ts));
+        out
     }
 }
 
@@ -168,8 +175,7 @@ async fn push_message(state: &Arc<MonitorState>, topic: String, payload: Vec<u8>
     {
         let mut recent = state.recent_ts.write().await;
         recent.push_back(ts);
-        let cutoff = ts.saturating_sub(60_000);
-        while recent.front().is_some_and(|t| *t < cutoff) {
+        while recent.front().is_some_and(|t| *t < ts.saturating_sub(60_000)) {
             recent.pop_front();
         }
     }
@@ -179,7 +185,11 @@ async fn push_message(state: &Arc<MonitorState>, topic: String, payload: Vec<u8>
     });
 }
 
-async fn refresh_stats(state: &Arc<MonitorState>, connections: usize, subscriptions: usize) {
+async fn refresh_stats(
+    state: &Arc<MonitorState>,
+    connections: &[ConnectionSnapshot],
+    subscriptions: &[SubscriptionSnapshot],
+) {
     let ts = now_millis();
     let messages_last_minute = state.recent_ts.read().await.len() as u64;
     let top_topics = {
@@ -196,9 +206,11 @@ async fn refresh_stats(state: &Arc<MonitorState>, connections: usize, subscripti
         items
     };
 
+    let total_subscriptions = connections.iter().map(|c| c.subscriptions.len()).sum();
+
     let stats = MonitorStats {
-        total_connections: connections,
-        total_subscriptions: subscriptions,
+        total_connections: connections.len(),
+        total_subscriptions,
         total_messages: state.message_total.load(Ordering::Relaxed),
         messages_last_minute,
         top_topics,
@@ -206,6 +218,8 @@ async fn refresh_stats(state: &Arc<MonitorState>, connections: usize, subscripti
     };
 
     *state.stats.write().await = stats.clone();
+    *state.connections.write().await = connections.to_vec();
+    *state.subscriptions.write().await = subscriptions.to_vec();
     let _ = state.tx.send(MonitorEvent::Stats { stats });
 }
 
@@ -219,8 +233,8 @@ fn collector_loop(
         .build()
         .context("monitor tokio runtime")?;
 
-    let mut last_connections = 0usize;
-    let mut last_subscriptions = 0usize;
+    let mut connections = Vec::new();
+    let mut subscriptions = Vec::new();
     let mut last_meter_poll = Instant::now();
 
     loop {
@@ -228,23 +242,16 @@ fn collector_loop(
             if let Ok(batch) = meters.recv() {
                 for meter in batch {
                     match meter {
-                        Meter::Router(_, router) => {
-                            last_connections = router.total_connections;
+                        Meter::Connections(list) => connections = list,
+                        Meter::Subscriptions(list) => subscriptions = list,
+                        Meter::Router(_, router) if connections.is_empty() => {
+                            let _ = router.total_connections;
                         }
-                        Meter::Subscription(_, sub) => {
-                            last_subscriptions = last_subscriptions.max(sub.count);
-                        }
+                        _ => {}
                     }
                 }
             }
-            if let Some(n) = scrape_prometheus_connections() {
-                last_connections = n;
-            }
-            runtime.block_on(refresh_stats(
-                &state,
-                last_connections,
-                last_subscriptions,
-            ));
+            runtime.block_on(refresh_stats(&state, &connections, &subscriptions));
             last_meter_poll = Instant::now();
         }
 
@@ -265,29 +272,6 @@ fn collector_loop(
             Err(e) => return Err(anyhow::anyhow!("monitor link error: {e}")),
         }
     }
-}
-
-fn scrape_prometheus_connections() -> Option<usize> {
-    use std::io::{Read, Write};
-    use std::net::TcpStream;
-    use std::time::Duration;
-
-    let mut stream = TcpStream::connect("127.0.0.1:9042").ok()?;
-    stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
-    stream
-        .write_all(
-            b"GET /metrics HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
-        )
-        .ok()?;
-    let mut raw = String::new();
-    stream.read_to_string(&mut raw).ok()?;
-    let body = raw.split("\r\n\r\n").nth(1).unwrap_or(&raw);
-    for line in body.lines() {
-        if line.starts_with("metrics_router_total_connections ") {
-            return line.split_whitespace().nth(1)?.parse().ok();
-        }
-    }
-    None
 }
 
 pub type SharedMonitor = Arc<MonitorState>;

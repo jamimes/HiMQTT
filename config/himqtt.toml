@@ -7,6 +7,21 @@ max_outgoing_packet_count = 200
 max_segment_size = 104857600
 max_segment_count = 10
 
+# PostgreSQL（ACL / 管理后台）
+[database]
+url = "postgresql://himqtt:himqtt@127.0.0.1:5432/himqtt"
+max_connections = 5
+
+[acl]
+enabled = true
+enforce_registered_topics = true
+cache_refresh_secs = 10
+
+[admin]
+listen = "127.0.0.1:8091"
+default_password = "admin123"
+static_dir = "admin-web/dist"
+
 # MQTT 3.1.1，标准端口 1883
 [v4.1]
 name = "mqtt-v4"
@@ -16,10 +31,7 @@ next_connection_delay_ms = 1
     connection_timeout_ms = 60000
     max_payload_size = 262144
     max_inflight_count = 100
-    dynamic_filters = true
-    # 取消注释以启用用户名/密码认证
-    # [v4.1.connections.auth]
-    # admin = "changeme"
+    dynamic_filters = false
 
 # MQTT 5.0
 [v5.1]
@@ -30,6 +42,7 @@ next_connection_delay_ms = 1
     connection_timeout_ms = 60000
     max_payload_size = 262144
     max_inflight_count = 100
+    dynamic_filters = false
 
 # WebSocket（浏览器 / 前端客户端）
 [ws.1]
@@ -41,6 +54,7 @@ next_connection_delay_ms = 1
     max_client_id_len = 256
     max_payload_size = 262144
     max_inflight_count = 500
+    dynamic_filters = false
 
 # 管理控制台（rumqttd JSON API）
 [console]
@@ -58,7 +72,6 @@ push_interval = 1
 [metrics.alerts]
 push_interval = 30
 
-# HiMQTT 监控 Web 页面
+# HiMQTT 监控（数据采集，Web 界面已并入管理后台 :8091）
 [monitor]
-listen = "127.0.0.1:8090"
 max_messages = 500

@@ -1,42 +1,55 @@
 use std::convert::Infallible;
 
 use axum::{
-    extract::State,
+    extract::Query,
     response::{
         sse::{Event, KeepAlive, Sse},
         Html,
     },
-    routing::get,
-    Json, Router,
+    Json,
 };
 use futures_util::stream::{self, Stream};
+use serde::Deserialize;
 use tokio::sync::broadcast;
 
-use super::{MessageRecord, MonitorEvent, MonitorStats, SharedMonitor};
+use super::{
+    ConnectionSnapshot, MessageRecord, MonitorEvent, MonitorStats, SharedMonitor,
+    SubscriptionSnapshot,
+};
 
-pub fn router(state: SharedMonitor) -> Router {
-    Router::new()
-        .route("/", get(index))
-        .route("/api/stats", get(stats))
-        .route("/api/messages", get(messages))
-        .route("/api/events", get(events))
-        .with_state(state)
+#[derive(Deserialize)]
+pub struct MessagesQuery {
+    #[serde(default)]
+    recent: bool,
+    #[serde(default = "default_limit")]
+    limit: usize,
 }
 
-async fn index() -> Html<&'static str> {
-    Html(include_str!("../../static/monitor.html"))
+fn default_limit() -> usize {
+    500
 }
 
-async fn stats(State(state): State<SharedMonitor>) -> Json<MonitorStats> {
+pub async fn stats(state: &SharedMonitor) -> Json<MonitorStats> {
     Json(state.stats.read().await.clone())
 }
 
-async fn messages(State(state): State<SharedMonitor>) -> Json<Vec<MessageRecord>> {
-    Json(state.messages.read().await.iter().cloned().collect())
+pub async fn messages(
+    state: &SharedMonitor,
+    Query(query): Query<MessagesQuery>,
+) -> Json<Vec<MessageRecord>> {
+    Json(state.list_messages(query.recent, query.limit).await)
 }
 
-async fn events(
-    State(state): State<SharedMonitor>,
+pub async fn connections(state: &SharedMonitor) -> Json<Vec<ConnectionSnapshot>> {
+    Json(state.connections.read().await.clone())
+}
+
+pub async fn subscriptions(state: &SharedMonitor) -> Json<Vec<SubscriptionSnapshot>> {
+    Json(state.subscriptions.read().await.clone())
+}
+
+pub async fn events(
+    state: &SharedMonitor,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = state.tx.subscribe();
     let stream = stream::unfold(rx, |mut rx| async move {
@@ -57,4 +70,9 @@ async fn events(
     });
 
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+#[allow(dead_code)]
+pub async fn index() -> Html<&'static str> {
+    Html(include_str!("../../static/monitor.html"))
 }
