@@ -83,20 +83,15 @@ function LoginPage({ onLogin }: { onLogin: (token: string, username: string) => 
 
   return (
     <div className="login-page">
-      <div className="auth-card">
-        <div className="auth-card-head">
-          <h5>Welcome Back !</h5>
-          <p>Sign in to continue to HiMQTT.</p>
-          <svg className="auth-illustration" viewBox="0 0 200 160" fill="none" aria-hidden="true">
-            <rect x="120" y="30" width="60" height="80" rx="4" fill="#556ee6" opacity="0.15" />
-            <rect x="130" y="40" width="40" height="28" rx="2" fill="#556ee6" opacity="0.35" />
-            <circle cx="60" cy="90" r="28" fill="#556ee6" opacity="0.2" />
-            <rect x="30" y="110" width="80" height="8" rx="4" fill="#556ee6" opacity="0.25" />
-            <rect x="40" y="70" width="50" height="6" rx="3" fill="#34c38f" opacity="0.5" />
-          </svg>
-          <div className="auth-logo-badge">H</div>
-        </div>
-        <div className="auth-card-body">
+      <div className="login-brand">
+        <div className="brand-mark">H</div>
+        <h2>HiMQTT</h2>
+        <p>MQTT Broker 管理控制台 — 连接监控、用户认证与 ACL 权限统一管理。</p>
+      </div>
+      <div className="login-panel">
+        <div className="login-card">
+          <h3>Sign In</h3>
+          <p className="login-desc">登录以继续访问管理后台</p>
           <form className="form-grid" onSubmit={submit}>
             <label>
               用户名
@@ -108,17 +103,16 @@ function LoginPage({ onLogin }: { onLogin: (token: string, username: string) => 
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter Password"
+                placeholder="Enter password"
               />
             </label>
             <button className="btn" type="submit" disabled={loading} style={{ width: "100%" }}>
-              {loading ? "登录中..." : "Log In"}
+              {loading ? "登录中..." : "Sign In"}
             </button>
             {error && <div className="error-banner">{error}</div>}
           </form>
         </div>
       </div>
-      <p className="auth-footer">© {new Date().getFullYear()} HiMQTT · MQTT Broker Admin</p>
     </div>
   );
 }

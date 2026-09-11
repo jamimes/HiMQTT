@@ -122,6 +122,9 @@ export const api = {
   monitorSubscriptions() {
     return request<SubscriptionInfo[]>("/api/monitor/subscriptions");
   },
+  monitorSystem() {
+    return request<SystemSnapshot>("/api/monitor/system");
+  },
 };
 
 export type MqttUser = {
@@ -191,4 +194,26 @@ export type ConnectionInfo = {
 export type SubscriptionInfo = {
   filter: string;
   subscribers: string[];
+};
+
+export type SystemSnapshot = {
+  hostname: string;
+  cpu_usage: number;
+  cpu_cores: number;
+  cpu_per_core: number[];
+  memory_total_bytes: number;
+  memory_used_bytes: number;
+  memory_usage: number;
+  swap_total_bytes: number;
+  swap_used_bytes: number;
+  disk_total_bytes: number;
+  disk_used_bytes: number;
+  disk_usage: number;
+  load_avg_1: number;
+  load_avg_5: number;
+  load_avg_15: number;
+  uptime_secs: number;
+  process_cpu: number;
+  process_memory_bytes: number;
+  updated_at: number;
 };

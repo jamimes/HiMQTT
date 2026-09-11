@@ -24,7 +24,7 @@ pub struct MetersLink {
 
 impl MetersLink {
     pub fn new(router_tx: Sender<(ConnectionId, Event)>) -> Result<MetersLink, LinkError> {
-        let (tx, rx) = flume::bounded(100);
+        let (tx, rx) = flume::bounded(1000);
 
         router_tx.send((0, Event::NewMeter(tx)))?;
         let link = MetersLink { router_rx: rx };
@@ -32,7 +32,7 @@ impl MetersLink {
     }
 
     pub async fn init(router_tx: Sender<(ConnectionId, Event)>) -> Result<MetersLink, LinkError> {
-        let (tx, rx) = flume::bounded(100);
+        let (tx, rx) = flume::bounded(1000);
 
         router_tx.send_async((0, Event::NewMeter(tx))).await?;
         let link = MetersLink { router_rx: rx };

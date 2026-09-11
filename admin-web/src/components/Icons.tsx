@@ -79,3 +79,27 @@ export function IconClock({ size = 22, className }: IconProps) {
     </svg>
   );
 }
+
+export function IconCpu({ size = 22, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" className={className}>
+      <path d="M9 3v2H7c-1.1 0-2 .9-2 2v2H3v2h2v2H3v2h2v2c0 1.1.9 2 2 2h2v2h2v-2h2v2h2v-2h2c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2V9h-2V7c0-1.1-.9-2-2-2h-2V3h-2v2h-2V3H9zm0 4h6v10H9V7zm2 2v6h2V9h-2z" />
+    </svg>
+  );
+}
+
+export function IconMemory({ size = 22, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" className={className}>
+      <path d="M2 7v10c0 1.1.9 2 2 2h1v1h2v-1h10v1h2v-1h1c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2h-1V4h-2v1H7V4H5v1H4c-1.1 0-2 .9-2 2zm2 0h16v10H4V7zm2 2v6h2V9H6zm4 0v6h2V9h-2zm4 0v6h2V9h-2z" />
+    </svg>
+  );
+}
+
+export function IconDisk({ size = 22, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" className={className}>
+      <path d="M6 2h12a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm0 2v4h12V4H6zm0 6v10h12V10H6zm6 2a2 2 0 1 1 0 4 2 2 0 0 1 0-4z" />
+    </svg>
+  );
+}

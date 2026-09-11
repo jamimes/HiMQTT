@@ -22,6 +22,7 @@ use tracing::info;
 use crate::acl::AclService;
 use crate::db;
 use crate::monitor::{self, SharedMonitor};
+use crate::monitor::system::{SharedSystemMonitor, SystemMonitor, SystemSnapshot};
 use crate::monitor::web as monitor_web;
 
 pub use auth::AdminAuth;
@@ -63,6 +64,7 @@ struct AppState {
     acl: Arc<AclService>,
     auth: AdminAuth,
     monitor: Option<SharedMonitor>,
+    system: SharedSystemMonitor,
 }
 
 #[derive(Deserialize)]
@@ -397,6 +399,10 @@ async fn monitor_events(
     Ok(monitor_web::events(monitor).await)
 }
 
+async fn monitor_system(State(state): State<AppState>) -> Json<SystemSnapshot> {
+    Json(state.system.snapshot().await)
+}
+
 pub async fn serve(
     acl: Arc<AclService>,
     cfg: AdminConfig,
@@ -406,6 +412,7 @@ pub async fn serve(
         acl,
         auth: AdminAuth::new(),
         monitor,
+        system: SystemMonitor::spawn(),
     };
 
     let mut protected = Router::new()
@@ -420,7 +427,8 @@ pub async fn serve(
         .route("/api/topics/:id", put(update_topic).delete(delete_topic))
         .route("/api/acls", get(list_acls).post(create_acl))
         .route("/api/acls/:id", put(update_acl).delete(delete_acl))
-        .route("/api/acl/reload", post(reload_acl));
+        .route("/api/acl/reload", post(reload_acl))
+        .route("/api/monitor/system", get(monitor_system));
 
     if state.monitor.is_some() {
         protected = protected

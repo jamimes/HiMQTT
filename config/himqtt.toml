@@ -67,7 +67,7 @@ interval = 5
 
 # 周期性推送连接/订阅指标给监控页（alerts 段需同时存在，避免 rumqttd timer panic）
 [metrics.meters]
-push_interval = 1
+push_interval = 2
 
 [metrics.alerts]
 push_interval = 30

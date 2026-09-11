@@ -4,3 +4,4 @@ admin-web/dist
 Cargo.lock
 admin-web/tsconfig.tsbuildinfo
 scripts/__pycache__/
+.venv/

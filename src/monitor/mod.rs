@@ -1,3 +1,4 @@
+pub mod system;
 pub mod web;
 
 use std::collections::{HashMap, VecDeque};
@@ -238,19 +239,18 @@ fn collector_loop(
     let mut last_meter_poll = Instant::now();
 
     loop {
-        if last_meter_poll.elapsed().as_secs() >= 1 {
-            if let Ok(batch) = meters.recv() {
-                for meter in batch {
-                    match meter {
-                        Meter::Connections(list) => connections = list,
-                        Meter::Subscriptions(list) => subscriptions = list,
-                        Meter::Router(_, router) if connections.is_empty() => {
-                            let _ = router.total_connections;
-                        }
-                        _ => {}
-                    }
+        // 尽快排空 meters，避免通道满导致 broker 侧 try_send 持续失败
+        while let Ok(batch) = meters.recv() {
+            for meter in batch {
+                match meter {
+                    Meter::Connections(list) => connections = list,
+                    Meter::Subscriptions(list) => subscriptions = list,
+                    Meter::Router(_, _) | Meter::Subscription(_, _) => {}
                 }
             }
+        }
+
+        if last_meter_poll.elapsed().as_secs() >= 1 {
             runtime.block_on(refresh_stats(&state, &connections, &subscriptions));
             last_meter_poll = Instant::now();
         }
