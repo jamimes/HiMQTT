@@ -1,20 +1,24 @@
 import { ReactNode, useEffect, useState } from "react";
 import {
   IconDashboard,
+  IconFolder,
   IconMenu,
   IconSearch,
+  IconSettings,
   IconShield,
   IconTopic,
   IconUsers,
 } from "./Icons";
 
-export type NavKey = "monitor" | "users" | "topics" | "acls";
+export type NavKey = "monitor" | "users" | "categories" | "topics" | "acls" | "settings";
 
 const NAV: { key: NavKey; label: string; icon: typeof IconDashboard }[] = [
   { key: "monitor", label: "连接监控", icon: IconDashboard },
   { key: "users", label: "MQTT 用户", icon: IconUsers },
+  { key: "categories", label: "用户分类", icon: IconFolder },
   { key: "topics", label: "Topic 目录", icon: IconTopic },
   { key: "acls", label: "ACL 规则", icon: IconShield },
+  { key: "settings", label: "系统设置", icon: IconSettings },
 ];
 
 const PAGE_META: Record<
@@ -28,8 +32,13 @@ const PAGE_META: Record<
   },
   users: {
     title: "MQTT 用户",
-    subtitle: "管理客户端登录账号与密码。",
+    subtitle: "管理客户端账号、Topic、ACL 与批量导入。",
     breadcrumb: "用户管理",
+  },
+  categories: {
+    title: "用户分类",
+    subtitle: "为 MQTT 用户划分业务类别。",
+    breadcrumb: "用户分类",
   },
   topics: {
     title: "Topic 目录",
@@ -40,6 +49,11 @@ const PAGE_META: Record<
     title: "ACL 规则",
     subtitle: "配置每个用户的订阅与发布权限。",
     breadcrumb: "ACL",
+  },
+  settings: {
+    title: "系统设置",
+    subtitle: "配置新建用户时的默认 Topic 与 ACL 模板。",
+    breadcrumb: "系统设置",
   },
 };
 

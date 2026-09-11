@@ -108,6 +108,10 @@ impl AclService {
         }
     }
 
+    pub async fn record_last_login(&self, username: &str, ip: &str) -> Result<()> {
+        db::record_mqtt_user_login(&self.pool, username, ip).await
+    }
+
     pub fn check_acl(&self, username: &str, topic_or_filter: &str, op: AclOperation) -> bool {
         let cache = match self.cache.read() {
             Ok(c) => c,

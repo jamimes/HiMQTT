@@ -22,12 +22,12 @@ fn main() {
     let server = config.v4.as_mut().and_then(|v4| v4.get_mut("1")).unwrap();
 
     // external_auth function / closure signature must be:
-    // async fn(ClientId, AuthUser, AuthPass) -> bool
-    // type for ClientId, AuthUser and AuthPass is String
+    // async fn(ClientId, AuthUser, AuthPass, AuthPeer) -> bool
+    // type for ClientId, AuthUser, AuthPass and AuthPeer is String
     server.set_auth_handler(auth);
 
     // or you can pass closure
-    // server.set_auth_handler(|_client_id, _username, _password| async {
+    // server.set_auth_handler(|_client_id, _username, _password, _peer| async {
     //     // perform auth
     //     true
     // });
@@ -37,7 +37,7 @@ fn main() {
     broker.start().unwrap();
 }
 
-async fn auth(_client_id: String, _username: String, _password: String) -> bool {
+async fn auth(_client_id: String, _username: String, _password: String, _peer: String) -> bool {
     // users can fetch data from DB or tokens and use them!
     // do the verification and return true if verified, else false
     true

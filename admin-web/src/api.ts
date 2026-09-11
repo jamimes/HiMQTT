@@ -55,13 +55,19 @@ export const api = {
   listMqttUsers() {
     return request<MqttUser[]>("/api/mqtt-users");
   },
-  createMqttUser(body: { username: string; password: string; enabled: boolean }) {
+  createMqttUser(body: CreateMqttUserBody) {
     return request<MqttUser>("/api/mqtt-users", {
       method: "POST",
       body: JSON.stringify(body),
     });
   },
-  updateMqttUser(id: number, body: { password?: string; enabled: boolean }) {
+  batchCreateMqttUsers(body: BatchMqttUsersBody) {
+    return request<BatchMqttUsersResult>("/api/mqtt-users/batch", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  },
+  updateMqttUser(id: number, body: UpdateMqttUserBody) {
     return request<MqttUser>(`/api/mqtt-users/${id}`, {
       method: "PUT",
       body: JSON.stringify(body),
@@ -70,16 +76,49 @@ export const api = {
   deleteMqttUser(id: number) {
     return request<void>(`/api/mqtt-users/${id}`, { method: "DELETE" });
   },
+  getUserResources(id: number) {
+    return request<UserResources>(`/api/mqtt-users/${id}/resources`);
+  },
+  listCategories() {
+    return request<UserCategory[]>("/api/categories");
+  },
+  createCategory(body: { name: string; description: string }) {
+    return request<UserCategory>("/api/categories", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  },
+  updateCategory(id: number, body: { name: string; description: string }) {
+    return request<UserCategory>(`/api/categories/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+  },
+  deleteCategory(id: number) {
+    return request<void>(`/api/categories/${id}`, { method: "DELETE" });
+  },
+  getUserDefaults() {
+    return request<UserDefaultsSettings>("/api/settings/user-defaults");
+  },
+  updateUserDefaults(body: UserDefaultsSettings) {
+    return request<UserDefaultsSettings>("/api/settings/user-defaults", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+  },
   listTopics() {
     return request<MqttTopic[]>("/api/topics");
   },
-  createTopic(body: { topic: string; description: string }) {
+  createTopic(body: { topic: string; description: string; owner_username?: string | null }) {
     return request<MqttTopic>("/api/topics", {
       method: "POST",
       body: JSON.stringify(body),
     });
   },
-  updateTopic(id: number, body: { topic: string; description: string }) {
+  updateTopic(
+    id: number,
+    body: { topic: string; description: string; owner_username?: string | null },
+  ) {
     return request<MqttTopic>(`/api/topics/${id}`, {
       method: "PUT",
       body: JSON.stringify(body),
@@ -131,14 +170,75 @@ export type MqttUser = {
   id: number;
   username: string;
   enabled: boolean;
+  category_id: number | null;
+  category_name: string | null;
+  last_login_at: string | null;
+  last_login_ip: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type UserCategory = {
+  id: number;
+  name: string;
+  description: string;
+  created_at: string;
+};
+
+export type CreateMqttUserBody = {
+  username: string;
+  password: string;
+  enabled: boolean;
+  category_id?: number | null;
+  apply_defaults?: boolean;
+};
+
+export type UpdateMqttUserBody = {
+  password?: string;
+  enabled: boolean;
+  category_id?: number | null;
+};
+
+export type BatchMqttUsersBody = {
+  text: string;
+  category_id?: number | null;
+  enabled: boolean;
+  apply_defaults: boolean;
+};
+
+export type BatchMqttUsersResult = {
+  created: number;
+  skipped: string[];
+  errors: string[];
+};
+
+export type UserResources = {
+  user: MqttUser;
+  topics: MqttTopic[];
+  acls: AclRule[];
+};
+
+export type DefaultTopicTemplate = {
+  topic: string;
+  description: string;
+};
+
+export type DefaultAclTemplate = {
+  topic_pattern: string;
+  can_subscribe: boolean;
+  can_publish: boolean;
+};
+
+export type UserDefaultsSettings = {
+  default_topics: DefaultTopicTemplate[];
+  default_acls: DefaultAclTemplate[];
 };
 
 export type MqttTopic = {
   id: number;
   topic: string;
   description: string;
+  owner_username: string | null;
   created_at: string;
 };
 

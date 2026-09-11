@@ -12,7 +12,7 @@ use axum::{
     routing::{get, post, put},
     Json, Router,
 };
-use bcrypt::{hash, verify, DEFAULT_COST};
+use bcrypt::{hash, verify};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
@@ -24,6 +24,9 @@ use crate::db;
 use crate::monitor::{self, SharedMonitor};
 use crate::monitor::system::{SharedSystemMonitor, SystemMonitor, SystemSnapshot};
 use crate::monitor::web as monitor_web;
+
+/// MQTT 设备密码 bcrypt cost。管理员账号仍用 bcrypt::DEFAULT_COST（12）。
+const MQTT_PASSWORD_BCRYPT_COST: u32 = 10;
 
 pub use auth::AdminAuth;
 
@@ -85,6 +88,9 @@ struct CreateMqttUserRequest {
     password: String,
     #[serde(default = "default_enabled")]
     enabled: bool,
+    category_id: Option<i32>,
+    #[serde(default = "default_true")]
+    apply_defaults: bool,
 }
 
 #[derive(Deserialize)]
@@ -92,6 +98,40 @@ struct UpdateMqttUserRequest {
     password: Option<String>,
     #[serde(default = "default_enabled")]
     enabled: bool,
+    /// 更新分类；null 表示清空
+    category_id: Option<i32>,
+}
+
+#[derive(Deserialize)]
+struct BatchMqttUsersRequest {
+    /// 每行：用户名 密码（空格/制表符分隔）
+    text: String,
+    category_id: Option<i32>,
+    #[serde(default = "default_enabled")]
+    enabled: bool,
+    #[serde(default = "default_true")]
+    apply_defaults: bool,
+}
+
+#[derive(Serialize)]
+struct BatchMqttUsersResponse {
+    created: usize,
+    skipped: Vec<String>,
+    errors: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct CreateCategoryRequest {
+    name: String,
+    #[serde(default)]
+    description: String,
+}
+
+#[derive(Deserialize)]
+struct UpdateCategoryRequest {
+    name: String,
+    #[serde(default)]
+    description: String,
 }
 
 #[derive(Deserialize)]
@@ -99,6 +139,7 @@ struct CreateTopicRequest {
     topic: String,
     #[serde(default)]
     description: String,
+    owner_username: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -106,6 +147,7 @@ struct UpdateTopicRequest {
     topic: String,
     #[serde(default)]
     description: String,
+    owner_username: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -127,7 +169,18 @@ struct UpdateAclRequest {
     can_publish: bool,
 }
 
+#[derive(Serialize)]
+struct UserResourcesResponse {
+    user: db::MqttUserRow,
+    topics: Vec<db::MqttTopicRow>,
+    acls: Vec<db::AclRuleRow>,
+}
+
 fn default_enabled() -> bool {
+    true
+}
+
+fn default_true() -> bool {
     true
 }
 
@@ -212,12 +265,103 @@ async fn create_mqtt_user(
     State(state): State<AppState>,
     Json(body): Json<CreateMqttUserRequest>,
 ) -> Result<(StatusCode, Json<db::MqttUserRow>), StatusCode> {
-    let password_hash = hash(&body.password, DEFAULT_COST).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let user = db::create_mqtt_user(state.acl.pool(), &body.username, &password_hash, body.enabled)
-        .await
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let password_hash =
+        hash(&body.password, MQTT_PASSWORD_BCRYPT_COST).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let user = db::create_mqtt_user(
+        state.acl.pool(),
+        &body.username,
+        &password_hash,
+        body.enabled,
+        body.category_id,
+    )
+    .await
+    .map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    if body.apply_defaults {
+        let defaults = db::get_user_defaults(state.acl.pool())
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        db::apply_user_defaults(state.acl.pool(), &user.username, &defaults)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
     state.acl.reload().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok((StatusCode::CREATED, Json(user)))
+}
+
+async fn batch_create_mqtt_users(
+    State(state): State<AppState>,
+    Json(body): Json<BatchMqttUsersRequest>,
+) -> Result<Json<BatchMqttUsersResponse>, StatusCode> {
+    let defaults = if body.apply_defaults {
+        Some(
+            db::get_user_defaults(state.acl.pool())
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        )
+    } else {
+        None
+    };
+
+    let mut created = 0usize;
+    let mut skipped = Vec::new();
+    let mut errors = Vec::new();
+
+    for (idx, raw_line) in body.text.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 2 {
+            errors.push(format!("第 {} 行格式错误: {line}", idx + 1));
+            continue;
+        }
+        let username = parts[0];
+        let password = parts[1];
+        if password.is_empty() {
+            errors.push(format!("第 {} 行密码为空: {username}", idx + 1));
+            continue;
+        }
+
+        let password_hash = match hash(password, MQTT_PASSWORD_BCRYPT_COST) {
+            Ok(h) => h,
+            Err(_) => {
+                errors.push(format!("用户 {username} 密码哈希失败"));
+                continue;
+            }
+        };
+
+        match db::create_mqtt_user(
+            state.acl.pool(),
+            username,
+            &password_hash,
+            body.enabled,
+            body.category_id,
+        )
+        .await
+        {
+            Ok(user) => {
+                if let Some(ref defaults) = defaults {
+                    if let Err(e) =
+                        db::apply_user_defaults(state.acl.pool(), &user.username, defaults).await
+                    {
+                        errors.push(format!("用户 {username} 应用默认规则失败: {e:#}"));
+                    }
+                }
+                created += 1;
+            }
+            Err(_) => skipped.push(username.to_owned()),
+        }
+    }
+
+    state.acl.reload().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(BatchMqttUsersResponse {
+        created,
+        skipped,
+        errors,
+    }))
 }
 
 async fn update_mqtt_user(
@@ -227,7 +371,7 @@ async fn update_mqtt_user(
 ) -> Result<Json<db::MqttUserRow>, StatusCode> {
     let password_hash = match body.password {
         Some(p) if !p.is_empty() => Some(
-            hash(&p, DEFAULT_COST).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+            hash(&p, MQTT_PASSWORD_BCRYPT_COST).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
         ),
         _ => None,
     };
@@ -236,6 +380,7 @@ async fn update_mqtt_user(
         id,
         password_hash.as_deref(),
         body.enabled,
+        Some(body.category_id),
     )
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -258,6 +403,86 @@ async fn delete_mqtt_user(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn get_user_resources(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+) -> Result<Json<UserResourcesResponse>, StatusCode> {
+    let user = db::get_mqtt_user_by_id(state.acl.pool(), id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let topics = db::list_mqtt_topics_for_user(state.acl.pool(), &user.username)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let acls = db::list_topic_acls_for_user(state.acl.pool(), &user.username)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(UserResourcesResponse { user, topics, acls }))
+}
+
+async fn list_categories(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<db::MqttUserCategoryRow>>, StatusCode> {
+    db::list_categories(state.acl.pool())
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn create_category(
+    State(state): State<AppState>,
+    Json(body): Json<CreateCategoryRequest>,
+) -> Result<(StatusCode, Json<db::MqttUserCategoryRow>), StatusCode> {
+    let row = db::create_category(state.acl.pool(), &body.name, &body.description)
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    Ok((StatusCode::CREATED, Json(row)))
+}
+
+async fn update_category(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+    Json(body): Json<UpdateCategoryRequest>,
+) -> Result<Json<db::MqttUserCategoryRow>, StatusCode> {
+    let row = db::update_category(state.acl.pool(), id, &body.name, &body.description)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(row))
+}
+
+async fn delete_category(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+) -> Result<StatusCode, StatusCode> {
+    let deleted = db::delete_category(state.acl.pool(), id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !deleted {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_settings(
+    State(state): State<AppState>,
+) -> Result<Json<db::UserDefaultsSettings>, StatusCode> {
+    db::get_user_defaults(state.acl.pool())
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn update_settings(
+    State(state): State<AppState>,
+    Json(body): Json<db::UserDefaultsSettings>,
+) -> Result<Json<db::UserDefaultsSettings>, StatusCode> {
+    db::set_user_defaults(state.acl.pool(), &body)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
 async fn list_topics(State(state): State<AppState>) -> Result<Json<Vec<db::MqttTopicRow>>, StatusCode> {
     db::list_mqtt_topics(state.acl.pool())
         .await
@@ -269,9 +494,14 @@ async fn create_topic(
     State(state): State<AppState>,
     Json(body): Json<CreateTopicRequest>,
 ) -> Result<(StatusCode, Json<db::MqttTopicRow>), StatusCode> {
-    let topic = db::create_mqtt_topic(state.acl.pool(), &body.topic, &body.description)
-        .await
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let topic = db::create_mqtt_topic(
+        state.acl.pool(),
+        &body.topic,
+        &body.description,
+        body.owner_username.as_deref(),
+    )
+    .await
+    .map_err(|_| StatusCode::BAD_REQUEST)?;
     state.acl.reload().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok((StatusCode::CREATED, Json(topic)))
 }
@@ -281,10 +511,16 @@ async fn update_topic(
     Path(id): Path<i32>,
     Json(body): Json<UpdateTopicRequest>,
 ) -> Result<Json<db::MqttTopicRow>, StatusCode> {
-    let topic = db::update_mqtt_topic(state.acl.pool(), id, &body.topic, &body.description)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let topic = db::update_mqtt_topic(
+        state.acl.pool(),
+        id,
+        &body.topic,
+        &body.description,
+        body.owner_username.as_deref(),
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .ok_or(StatusCode::NOT_FOUND)?;
     state.acl.reload().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(topic))
 }
@@ -419,10 +655,18 @@ pub async fn serve(
         .route("/api/auth/me", get(me))
         .route("/api/auth/logout", post(logout))
         .route("/api/mqtt-users", get(list_mqtt_users).post(create_mqtt_user))
+        .route("/api/mqtt-users/batch", post(batch_create_mqtt_users))
         .route(
             "/api/mqtt-users/:id",
             put(update_mqtt_user).delete(delete_mqtt_user),
         )
+        .route("/api/mqtt-users/:id/resources", get(get_user_resources))
+        .route("/api/categories", get(list_categories).post(create_category))
+        .route(
+            "/api/categories/:id",
+            put(update_category).delete(delete_category),
+        )
+        .route("/api/settings/user-defaults", get(get_settings).put(update_settings))
         .route("/api/topics", get(list_topics).post(create_topic))
         .route("/api/topics/:id", put(update_topic).delete(delete_topic))
         .route("/api/acls", get(list_acls).post(create_acl))

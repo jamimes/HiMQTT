@@ -231,30 +231,65 @@ fn install_auth_handlers(configs: &mut rumqttd::Config, acl: Arc<AclService>) {
     if let Some(v4) = configs.v4.as_mut() {
         for server in v4.values_mut() {
             let acl = Arc::clone(&acl);
-            server.set_auth_handler(move |_client_id, username, password| {
+            server.set_auth_handler(move |_client_id, username, password, peer| {
                 let acl = Arc::clone(&acl);
-                async move { acl.verify_mqtt_password(&username, &password).await }
+                async move {
+                    let ok = acl.verify_mqtt_password(&username, &password).await;
+                    if ok {
+                        let ip = peer_ip_only(&peer);
+                        if let Err(e) = acl.record_last_login(&username, &ip).await {
+                            tracing::warn!("记录最后登录失败: {e:#}");
+                        }
+                    }
+                    ok
+                }
             });
         }
     }
     if let Some(v5) = configs.v5.as_mut() {
         for server in v5.values_mut() {
             let acl = Arc::clone(&acl);
-            server.set_auth_handler(move |_client_id, username, password| {
+            server.set_auth_handler(move |_client_id, username, password, peer| {
                 let acl = Arc::clone(&acl);
-                async move { acl.verify_mqtt_password(&username, &password).await }
+                async move {
+                    let ok = acl.verify_mqtt_password(&username, &password).await;
+                    if ok {
+                        let ip = peer_ip_only(&peer);
+                        if let Err(e) = acl.record_last_login(&username, &ip).await {
+                            tracing::warn!("记录最后登录失败: {e:#}");
+                        }
+                    }
+                    ok
+                }
             });
         }
     }
     if let Some(ws) = configs.ws.as_mut() {
         for server in ws.values_mut() {
             let acl = Arc::clone(&acl);
-            server.set_auth_handler(move |_client_id, username, password| {
+            server.set_auth_handler(move |_client_id, username, password, peer| {
                 let acl = Arc::clone(&acl);
-                async move { acl.verify_mqtt_password(&username, &password).await }
+                async move {
+                    let ok = acl.verify_mqtt_password(&username, &password).await;
+                    if ok {
+                        let ip = peer_ip_only(&peer);
+                        if let Err(e) = acl.record_last_login(&username, &ip).await {
+                            tracing::warn!("记录最后登录失败: {e:#}");
+                        }
+                    }
+                    ok
+                }
             });
         }
     }
+}
+
+fn peer_ip_only(peer: &str) -> String {
+    // SocketAddr Display is "ip:port" (IPv6 in brackets)
+    if let Ok(addr) = peer.parse::<std::net::SocketAddr>() {
+        return addr.ip().to_string();
+    }
+    peer.to_owned()
 }
 
 impl AclService {

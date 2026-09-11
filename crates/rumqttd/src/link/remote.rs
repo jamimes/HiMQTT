@@ -177,6 +177,7 @@ impl<P: Protocol> RemoteLink<P> {
 pub async fn mqtt_connect<P>(
     config: Arc<ConnectionSettings>,
     network: &mut Network<P>,
+    peer_addr: Option<String>,
 ) -> Result<Packet, Error>
 where
     P: Protocol,
@@ -198,7 +199,13 @@ where
 
     Span::current().record("client_id", &connect.client_id);
 
-    handle_auth(config.clone(), login.as_ref(), &connect.client_id).await?;
+    handle_auth(
+        config.clone(),
+        login.as_ref(),
+        &connect.client_id,
+        peer_addr.unwrap_or_default(),
+    )
+    .await?;
 
     // When keep_alive feature is disabled client can live forever, which is not good in
     // distributed broker context so currenlty we don't allow it.
@@ -229,6 +236,7 @@ async fn handle_auth(
     config: Arc<ConnectionSettings>,
     login: Option<&Login>,
     client_id: &str,
+    peer_addr: String,
 ) -> Result<(), Error> {
     if config.auth.is_none() && config.external_auth.is_none() {
         return Ok(());
@@ -248,6 +256,7 @@ async fn handle_auth(
             client_id.to_owned(),
             username.to_owned(),
             password.to_owned(),
+            peer_addr,
         )
         .await
         {
@@ -299,7 +308,7 @@ mod tests {
     #[tokio::test]
     async fn no_login_no_auth() {
         let cfg = Arc::new(config());
-        let r = handle_auth(cfg, None, "").await;
+        let r = handle_auth(cfg, None, "", String::new()).await;
         assert!(r.is_ok());
     }
 
@@ -307,7 +316,7 @@ mod tests {
     async fn some_login_no_auth() {
         let cfg = Arc::new(config());
         let login = login();
-        let r = handle_auth(cfg, Some(&login), "").await;
+        let r = handle_auth(cfg, Some(&login), "", String::new()).await;
         assert!(r.is_ok());
     }
 
@@ -320,7 +329,7 @@ mod tests {
         let mut cfg = config();
         cfg.auth = Some(map);
 
-        let r = handle_auth(Arc::new(cfg), Some(&login), "").await;
+        let r = handle_auth(Arc::new(cfg), Some(&login), "", String::new()).await;
         assert!(r.is_ok());
     }
 
@@ -333,7 +342,7 @@ mod tests {
         let mut cfg = config();
         cfg.auth = Some(map);
 
-        let r = handle_auth(Arc::new(cfg), Some(&login), "").await;
+        let r = handle_auth(Arc::new(cfg), Some(&login), "", String::new()).await;
         assert!(r.is_err());
     }
 
@@ -344,13 +353,13 @@ mod tests {
         let mut map = HashMap::<String, String>::new();
         map.insert("wrong".to_owned(), "wrong".to_owned());
 
-        let dynamic = |_: String, _: String, _: String| async { true };
+        let dynamic = |_: String, _: String, _: String, _: String| async { true };
 
         let mut cfg = config();
         cfg.auth = Some(map);
         cfg.set_auth_handler(dynamic);
 
-        let r = handle_auth(Arc::new(cfg), Some(&login), "").await;
+        let r = handle_auth(Arc::new(cfg), Some(&login), "", String::new()).await;
         assert!(r.is_ok());
     }
 
@@ -361,20 +370,20 @@ mod tests {
         let mut map = HashMap::<String, String>::new();
         map.insert("wrong".to_owned(), "wrong".to_owned());
 
-        let dynamic = |_: String, _: String, _: String| async { false };
+        let dynamic = |_: String, _: String, _: String, _: String| async { false };
 
         let mut cfg = config();
         cfg.auth = Some(map);
         cfg.set_auth_handler(dynamic);
 
-        let r = handle_auth(Arc::new(cfg), Some(&login), "").await;
+        let r = handle_auth(Arc::new(cfg), Some(&login), "", String::new()).await;
         assert!(r.is_err());
     }
 
     #[tokio::test]
     async fn external_auth_clousre_or_fnptr_type_check_or_fail_compile() {
-        let closure = |_: String, _: String, _: String| async { false };
-        async fn fnptr(_: String, _: String, _: String) -> bool {
+        let closure = |_: String, _: String, _: String, _: String| async { false };
+        async fn fnptr(_: String, _: String, _: String, _: String) -> bool {
             true
         }
 
