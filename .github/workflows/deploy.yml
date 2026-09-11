@@ -29,15 +29,23 @@ jobs:
       - name: Build release
         run: cargo build --release
 
+      - name: Build admin web
+        working-directory: admin-web
+        run: |
+          npm ci
+          npm run build
+
       - name: Prepare deploy bundle
         run: |
-          mkdir -p bundle
+          mkdir -p bundle/admin-web-dist
           cp target/release/himqtt bundle/
           cp config/himqtt.toml bundle/
           cp deploy/himqtt.service bundle/
           cp scripts/deploy_server.sh bundle/
           cp scripts/mqtt_smoke_test.py bundle/
-          chmod +x bundle/deploy_server.sh
+          cp scripts/setup_postgres_native.sh bundle/
+          cp -a admin-web/dist/. bundle/admin-web-dist/
+          chmod +x bundle/deploy_server.sh bundle/setup_postgres_native.sh
           tar czf himqtt-deploy.tgz -C bundle .
           tar tzf himqtt-deploy.tgz
 

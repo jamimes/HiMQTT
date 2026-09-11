@@ -1,13 +1,14 @@
 [Unit]
 Description=HiMQTT MQTT Broker
-Documentation=https://github.com/bytebeamio/rumqtt
-After=network-online.target
+Documentation=https://github.com/jamimes/HiMQTT
+After=network-online.target postgresql.service
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=himqtt
 Group=himqtt
+WorkingDirectory=/var/lib/himqtt
 ExecStart=/usr/local/bin/himqtt -q -c /etc/himqtt/himqtt.toml -v
 Restart=on-failure
 RestartSec=5
