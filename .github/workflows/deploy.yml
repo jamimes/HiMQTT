@@ -64,6 +64,13 @@ jobs:
         with:
           name: himqtt-deploy
 
+      - name: Show deploy target IP
+        run: |
+          echo "========== 部署目标 =========="
+          echo "DEPLOY_HOST=${{ secrets.DEPLOY_HOST }}"
+          echo "DEPLOY_USER=${{ secrets.DEPLOY_USER }}"
+          echo "================================"
+
       - name: Upload bundle archive to server
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -84,6 +91,12 @@ jobs:
           script: |
             set -euo pipefail
             export DEPLOY_HOST="${{ secrets.DEPLOY_HOST }}"
+            echo "========== 远程服务器 IP =========="
+            echo "DEPLOY_HOST=${DEPLOY_HOST}"
+            echo "hostname=$(hostname)"
+            echo "hostname -I: $(hostname -I 2>/dev/null || true)"
+            echo "公网出口: $(curl -4 -fsS --max-time 3 https://ifconfig.me/ip 2>/dev/null || curl -4 -fsS --max-time 3 https://api.ipify.org 2>/dev/null || echo '(未能获取)')"
+            echo "===================================="
             DEPLOY_DIR="/tmp/himqtt-deploy"
             mkdir -p "${DEPLOY_DIR}"
             tar xzf /tmp/himqtt-deploy.tgz -C "${DEPLOY_DIR}"
@@ -98,6 +111,7 @@ jobs:
         continue-on-error: true
         run: |
           HOST="${{ secrets.DEPLOY_HOST }}"
+          echo "探测目标服务器 IP: ${HOST}"
           for PORT in 1883 1884 8083; do
             echo "Probing ${HOST}:${PORT} ..."
             timeout 5 bash -c "echo > /dev/tcp/${HOST}/${PORT}" \

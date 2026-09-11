@@ -22,6 +22,31 @@ DB_NAME="${DB_NAME:-himqtt}"
 
 log() { echo "[deploy] $*"; }
 
+show_server_ips() {
+  local hostname_ips public_ip
+  hostname_ips="$(hostname -I 2>/dev/null | xargs || true)"
+  public_ip="$(
+    curl -4 -fsS --max-time 3 https://ifconfig.me/ip 2>/dev/null \
+      || curl -4 -fsS --max-time 3 https://api.ipify.org 2>/dev/null \
+      || true
+  )"
+
+  log "========== 服务器地址 =========="
+  log "主机名: $(hostname 2>/dev/null || echo unknown)"
+  if [[ -n "${DEPLOY_HOST:-}" ]]; then
+    log "部署目标 (DEPLOY_HOST): ${DEPLOY_HOST}"
+  fi
+  if [[ -n "${hostname_ips}" ]]; then
+    log "本机网卡 IP: ${hostname_ips}"
+  fi
+  if [[ -n "${public_ip}" ]]; then
+    log "公网出口 IP: ${public_ip}"
+  else
+    log "公网出口 IP: (未能获取)"
+  fi
+  log "================================"
+}
+
 require_root() {
   if [[ "${EUID}" -ne 0 ]]; then
     log "请使用 root 或通过 sudo 运行"
@@ -197,6 +222,8 @@ main() {
   require_root
   [[ -x "${DEPLOY_DIR}/himqtt" ]] || { log "缺少 ${DEPLOY_DIR}/himqtt"; exit 1; }
 
+  show_server_ips
+
   setup_user
   install_files
   ensure_postgres
@@ -222,13 +249,21 @@ main() {
   if [[ "${failed}" -ne 0 ]]; then
     log "部署完成，但部分端口检测失败"
     dump_service_logs
+    show_server_ips
     exit 1
   fi
 
+  local display_host="${DEPLOY_HOST:-}"
+  if [[ -z "${display_host}" ]]; then
+    display_host="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  fi
+  display_host="${display_host:-127.0.0.1}"
+
   log "部署成功"
-  log "MQTT v4:  ${DEPLOY_HOST:-<server-ip>}:1883"
-  log "MQTT v5:  ${DEPLOY_HOST:-<server-ip>}:1884"
-  log "WebSocket: ${DEPLOY_HOST:-<server-ip>}:8083"
+  show_server_ips
+  log "MQTT v4:  ${display_host}:1883"
+  log "MQTT v5:  ${display_host}:1884"
+  log "WebSocket: ${display_host}:8083"
   log "管理后台(本机): http://127.0.0.1:8091/  (admin / admin123)"
 }
 
